@@ -2,7 +2,7 @@
 //  random.c
 //  tcpcrypt
 //
-//  Created by Romeo Bellon on 30/07/2017.
+//  Created by Romeo Bellon.
 //  Copyright © 2017 Romeo Bellon. All rights reserved.
 //
 

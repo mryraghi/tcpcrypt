@@ -2,7 +2,7 @@
 //  checksum.h
 //  tcpcrypt
 //
-//  Created by Romeo Bellon on 23/07/2017.
+//  Created by Romeo Bellon.
 //  Copyright © 2017 Romeo Bellon. All rights reserved.
 //
 

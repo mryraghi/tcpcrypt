@@ -2,7 +2,7 @@
 //  common.h
 //  Kernel
 //
-//  Created by Romeo Bellon on 27/08/2017.
+//  Created by Romeo Bellon.
 //  Copyright © 2017 Romeo Bellon. All rights reserved.
 //
 
