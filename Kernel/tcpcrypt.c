@@ -6,13 +6,9 @@
 //  Copyright © 2017 Romeo Bellon. All rights reserved.
 //
 
-#include <mach/mach_types.h>
-
 #include "tcpcrypt.h"
 
 struct tc_conf tc_conf;
-
-struct ctl_list_head ctl_list;
 static boolean_t ctl_registered = FALSE;
 
 // filter vars
@@ -20,9 +16,20 @@ ipfilter_t  ip_filter_ref;
 boolean_t   ip_filter_registered = FALSE;
 boolean_t   ip_filter_detached =  FALSE;
 
+// mutex locks
+lck_mtx_t *connections_queue_mtx;
+lck_mtx_t *sessions_queue_mtx;
+lck_grp_t *mtx_grp;
+
 // Tag associated with this kext for use in marking packets that have been
 // previously processed
 mbuf_tag_id_t   id_tag;
+
+// kernel control reference
+kern_ctl_ref ctl_ref;
+
+struct connections_queue_head connections_queue;
+struct sessions_queue_head sessions_queue;
 
 typedef int (*opt_cb)(struct tcpcrypt_info *ti, int tcpop, int len, void *data);
 
@@ -62,7 +69,8 @@ static void set_eno(struct tcpopt_eno *eno, int len)
 
 static void ti_init(struct tcpcrypt_info *ti)
 {
-    memset(ti, 0, sizeof(*ti));
+    int result = 0;
+    bzero(ti, sizeof(*ti));
     
     ti->ti_state = tc_conf.tc_enabled ? STATE_CLOSED : STATE_DISABLED;
     ti->ti_mtu = TC_MTU;
@@ -70,11 +78,12 @@ static void ti_init(struct tcpcrypt_info *ti)
     ti->ti_sack_disable = 1;
     ti->ti_rto = 100 * 1000; // TODO
     ti->ti_nocache = tc_conf.tc_nocache;
+    ti->ti_ciphers_init = 0;
     
-    ti->ti_ciphers_pkey = _pkey;
-    ti->ti_ciphers_pkey_len = _pkey_len;
-    ti->ti_ciphers_sym = _sym;
-    ti->ti_ciphers_sym_len = _sym_len;
+    // if couldn't initiate ti and its ciphers then disable tcpcrypt
+    // TODO: could try again
+//    if (0 != (result = ctl_send_to_client((void *) ti, INIT_TI)))
+//        ti->ti_state = STATE_DISABLED;
 }
 
 static int connected(struct tcpcrypt_info *ti) {
@@ -94,7 +103,7 @@ struct connection* new_connection(struct ip *ip, struct tcphdr *tcp, int dir)
     ti = (struct tcpcrypt_info *)OSMalloc(sizeof (struct tcpcrypt_info),
                                           malloc_tag);
     
-    memset(c, 0, sizeof(*c));
+    bzero(c, sizeof(*c));
     
     c->c_addr[!dir].sin_addr.s_addr = ip->ip_src.s_addr;
     c->c_addr[!dir].sin_port = tcp->th_sport;
@@ -110,13 +119,13 @@ struct connection* new_connection(struct ip *ip, struct tcphdr *tcp, int dir)
     c->c_ti = ti;
     
     // allow only a single entry into the function at a time
-    lck_mtx_lock(gmutex);
+    lck_mtx_lock(connections_queue_mtx);
     
     printf("Adding c to connections_queue\n");
     TAILQ_INSERT_HEAD(&connections_queue, c, c_next);
     
     // release lock
-    lck_mtx_unlock(gmutex);
+    lck_mtx_unlock(connections_queue_mtx);
     
     return c;
 }
@@ -163,13 +172,13 @@ void remove_connection(struct ip *ip, struct tcphdr *tcp, int dir)
     // ti_finish(ti);
     
     // allow only a single entry into the function at a time
-    lck_mtx_lock(gmutex);
+    lck_mtx_lock(connections_queue_mtx);
     
     TAILQ_REMOVE(&connections_queue, c, c_next);
     OSFree(c, sizeof(struct connection), malloc_tag);
     
     // release lock
-    lck_mtx_unlock(gmutex);
+    lck_mtx_unlock(connections_queue_mtx);
 }
 
 struct ti_sess *session_find_host(struct tcpcrypt_info *ti, struct in_addr *in, int port)
@@ -177,25 +186,25 @@ struct ti_sess *session_find_host(struct tcpcrypt_info *ti, struct in_addr *in, 
     struct ti_sess *s, *s_next;
     
     // allow only a single entry into the function at a time
-    lck_mtx_lock(gmutex);
+    lck_mtx_lock(sessions_queue_mtx);
     
     // protect access to the info_so_queue
-    for (s = TAILQ_FIRST(&sessions_queue); s != NULL; s = s_next)
-    {
-        // get the next element pointer before we potentially corrupt it
-        s_next = TAILQ_NEXT(s, ts_next);
-        
-        if (!s->ts_used
-            && (s->ts_dir == ti->ti_dir)
-            && (s->ts_ip.s_addr == in->s_addr))
-        {
-            printf("Found session host\n");
-            return s;
-        }
-    }
+    //    for (s = TAILQ_FIRST(&sessions_queue); s != NULL; s = s_next)
+    //    {
+    //        // get the next element pointer before we potentially corrupt it
+    //        s_next = TAILQ_NEXT(s, ts_next);
+    //
+    //        if (!s->ts_used
+    //            && (s->ts_dir == ti->ti_dir)
+    //            && (s->ts_ip.s_addr == in->s_addr))
+    //        {
+    //            printf("Found session host\n");
+    //            return s;
+    //        }
+    //    }
     
     // release lock
-    lck_mtx_unlock(gmutex);
+    lck_mtx_unlock(sessions_queue_mtx);
     
     printf("Session host NOT found\n");
     return NULL;
@@ -208,19 +217,22 @@ struct ti_sess *session_find_host(struct tcpcrypt_info *ti, struct in_addr *in, 
  */
 void free_deferred_data()
 {
-    lck_mtx_lock(gmutex);
+    lck_mtx_lock(sessions_queue_mtx);
     
-    struct ti_sess *ts, *ts_next;
+    struct session *s, *s_next;
     
     // protect access to the info_so_queue
-    for (ts = TAILQ_FIRST(&sessions_queue); ts != NULL; ts = ts_next)
+    for (s = TAILQ_FIRST(&sessions_queue); s != NULL; s = s_next)
     {
         // get the next element pointer before we potentially corrupt it
-        ts_next = TAILQ_NEXT(ts, ts_next);
+        s_next = TAILQ_NEXT(s, s_next);
         
         printf("Removing 1 elem from sessions_queue\n");
-        TAILQ_REMOVE(&sessions_queue, ts, ts_next);
+        TAILQ_REMOVE(&sessions_queue, s, s_next);
     }
+    
+    lck_mtx_unlock(sessions_queue_mtx);
+    lck_mtx_lock(connections_queue_mtx);
     
     struct connection *c, *c_next;
     
@@ -237,7 +249,7 @@ void free_deferred_data()
         OSFree(c, sizeof(struct connection), malloc_tag);
     }
     
-    lck_mtx_unlock(gmutex);
+    lck_mtx_unlock(connections_queue_mtx);
 }
 
 static void foreach_opt(struct tcpcrypt_info *ti, struct tcphdr *tcp, opt_cb cb) {
@@ -442,7 +454,7 @@ static int sack_disable(struct tcpcrypt_info *ti, struct tcphdr *tcp)
     if (!sack)
         return NKE_ACCEPT;
     
-    memset(sack, TCPOPT_NOP, sizeof(*sack));
+//    memset(sack, TCPOPT_NOP, sizeof(*sack));
     
     return NKE_MODIFY;
 }
@@ -593,24 +605,6 @@ static void *data_alloc(struct tcpcrypt_info *ti, struct ip *ip,
     return p;
 }
 
-static void do_random(void *p, int len) {
-    uint8_t *x = p;
-    
-    while (len--)
-    {
-        *x++ = getRandomByte();// & 0xff;
-        printf("do_random: %d", getRandomByte());
-    }
-}
-
-static void generate_nonce(struct tcpcrypt_info *ti, int len) {
-    assert(ti->ti_nonce_len == 0);
-    
-    ti->ti_nonce_len = len;
-    
-    do_random(ti->ti_nonce, ti->ti_nonce_len);
-}
-
 static int add_eno(struct tcpcrypt_info *ti, struct ip *ip, struct tcphdr *tcp) {
     struct tcpopt_eno *eno;
     int len = sizeof(*eno);
@@ -631,7 +625,7 @@ static int do_output_pkconf_rcvd(struct tcpcrypt_info *ti, struct ip *ip, struct
                                  int retx)
 {
     int len;
-    uint16_t klen;
+    uint16_t klen = 0;
     struct tc_init1 *init1;
     void *key;
     uint8_t *p;
@@ -640,10 +634,10 @@ static int do_output_pkconf_rcvd(struct tcpcrypt_info *ti, struct ip *ip, struct
     if (add_eno(ti, ip, tcp) == -1)
         return NKE_ACCEPT;
     
-    if (!retx)
-        generate_nonce(ti, ti->ti_crypt_pub->cp_n_c);
+//    if (!retx)
+//        generate_nonce(ti, ti->ti_crypt_pub->cp_n_c);
     
-    klen = crypt_get_key(ti->ti_crypt_pub->cp_pub, &key);
+//    klen = crypt_get_key(ti->ti_crypt_pub->cp_pub, &key);
     len = sizeof(*init1)
     + ti->ti_ciphers_sym_len
     + ti->ti_nonce_len
@@ -718,7 +712,7 @@ static int do_output(struct ip *ip, struct tcphdr *tcp, struct tcpcrypt_info *ti
             break;
             
         case STATE_PKCONF_RCVD:
-            result = do_output_pkconf_rcvd(ti, ip, tcp, 0);
+//            result = do_output_pkconf_rcvd(ti, ip, tcp, 0);
             break;
             
         case STATE_INIT1_RCVD:
@@ -842,6 +836,7 @@ static int negotiate_cipher(struct tcpcrypt_info *ti, struct ti_cipher_spec *a, 
     struct ti_cipher_spec *out = &ti->ti_cipher_pkey;
     
     ti->ti_pub_cipher_list_len = an * sizeof(*a);
+    
     memcpy(ti->ti_pub_cipher_list, a, ti->ti_pub_cipher_list_len);
     
     while (an--) {
@@ -862,39 +857,12 @@ static int negotiate_cipher(struct tcpcrypt_info *ti, struct ti_cipher_spec *a, 
 
 static void init_pkey(struct tcpcrypt_info *ti)
 {
-    int error;
+    int result;
     
-    error = ctl_enqueuedata(ctl_ref, ctl->c_unit, ti, sizeof (ti), 0);
-    
-    if (error != 0) {
-        // probably out socket buffer space
-        printf("ctl_enqueuedata failed %d\n", error);
-    }
-    
-    
-    
-    
-    
-    lck_mtx_lock(ciphers_mutex);
-    
-    struct ciphers *c, *c_next;
-    struct ti_cipher_spec *s;
-    
-    assert(tc->tc_cipher_pkey.tcs_algo);
-    
-    for (c = TAILQ_FIRST(&ciphers_pkey); c != NULL; c = c_next)
-    {
-        c_next = TAILQ_NEXT(c, c_next);
-        
-        s = (struct ti_cipher_spec *) c->c_spec;
-        
-        if (s->tcs_algo == ti->ti_cipher_pkey.tcs_algo) {
-            ti->ti_crypt_pub = crypt_new(c->c_cipher->c_ctr);
-            return;
-        }
-    }
-    
-    lck_mtx_unlock(ciphers_mutex);
+    // if couldn't initiate ti and its ciphers then disable tcpcrypt
+    // TODO: could try again
+//    if (0 != (result = ctl_send_to_client((void *) ti, INIT_PKEY)))
+//        ti->ti_state = STATE_DISABLED;
     
     assert(!"Can't init cipher");
 }
@@ -1227,15 +1195,15 @@ static void tcpcrypt_packet(mbuf_t *mbuf, pkt_dir dir, ipf_pktopts_t options)
         result = do_input(ip, tcp, c->c_ti);
     
     // recompute TCP checksum
-    if (result == NKE_MODIFY)
-        checksum_tcp(ip, tcp);
+//    if (result == NKE_MODIFY)
+//        checksum_tcp(ip, tcp);
     
     // handle packet normally
     // TODO: NOT GOOD, do a BACKUP of the original packet, and reinject that one
     //    if (result == NKE_DROP)
     //        reinject_packet(packet, ntohs(ip->ip_len), options);
     
-    // if connection has been marked has dead or disabled,
+    // if connection has been marked as dead or disabled,
     // then remove connection from saved ones
     //    if (c->c_ti->ti_tcp_state == TCPSTATE_DEAD
     //        || c->c_ti->ti_state == STATE_DISABLED)
@@ -1359,8 +1327,8 @@ static errno_t alloc_locks(void)
     
     if (result == 0)
     {
-        ciphers_list_mutex = lck_mtx_alloc_init(gmutex_grp, LCK_ATTR_NULL);
-        if (ciphers_list_mutex == NULL)
+        sessions_queue_mtx = lck_mtx_alloc_init(mtx_grp, LCK_ATTR_NULL);
+        if (sessions_queue_mtx == NULL)
         {
             printf("Error calling lck_mtx_alloc_init\n");
             result = ENOMEM;
@@ -1386,22 +1354,22 @@ static errno_t alloc_locks(void)
 static void free_locks(void)
 {
     printf("Freeing locks\n");
-    if (gmutex)
+    if (sessions_queue_mtx)
     {
-        lck_mtx_free(gmutex, gmutex_grp);
-        gmutex = NULL;
+        lck_mtx_free(sessions_queue_mtx, mtx_grp);
+        sessions_queue_mtx = NULL;
     }
     
-    if (ciphers_list_mutex)
+    if (connections_queue_mtx)
     {
-        lck_mtx_free(ciphers_list_mutex, gmutex_grp);
-        ciphers_list_mutex = NULL;
+        lck_mtx_free(connections_queue_mtx, mtx_grp);
+        connections_queue_mtx = NULL;
     }
     
-    if (gmutex_grp)
+    if (mtx_grp)
     {
-        lck_grp_free(gmutex_grp);
-        gmutex_grp = NULL;
+        lck_grp_free(mtx_grp);
+        mtx_grp = NULL;
     }
 }
 
@@ -1413,10 +1381,7 @@ static struct ipf_filter ip_filter = {
     ip_filter_detach
 };
 
-//kern_return_t Kernel_start(kmod_info_t * ki, void *d);
-//kern_return_t Kernel_stop(kmod_info_t *ki, void *d);
-
-kern_return_t Kernel_start(kmod_info_t * ki, void *d)
+kern_return_t Tcpcrypt_start(kmod_info_t * ki, void *d)
 {
     int result;
     
@@ -1424,8 +1389,7 @@ kern_return_t Kernel_start(kmod_info_t * ki, void *d)
      * Queues
      */
     TAILQ_INIT(&connections_queue);
-    TAILQ_INIT(&ctl_list);
-    //TAILQ_INIT(&sessions_queue);
+    TAILQ_INIT(&sessions_queue);
     
     /*
      * Configs
@@ -1454,7 +1418,7 @@ kern_return_t Kernel_start(kmod_info_t * ki, void *d)
     malloc_tag = OSMalloc_Tagalloc(TCPCRYPT_BUNDLE_ID, OSMT_DEFAULT);
     if (malloc_tag == NULL)
     {
-        IOLog("ERROR - tcpcrypt_start: could not allocate tag\n");
+        printf("ERROR - tcpcrypt_start: could not allocate tag\n");
         goto bail;
     }
     
@@ -1464,7 +1428,7 @@ kern_return_t Kernel_start(kmod_info_t * ki, void *d)
     result = alloc_locks();
     if (result)
     {
-        IOLog("ERROR - tcpcrypt_start: could not allocate locks, result: %d",
+        printf("ERROR - tcpcrypt_start: could not allocate locks, result: %d",
               result);
         goto bail;
     }
@@ -1472,16 +1436,18 @@ kern_return_t Kernel_start(kmod_info_t * ki, void *d)
     /*
      * Kernel control
      */
-    result = ctl_register(&ctl_reg, &ctl_ref);
-    if (result == 0) {
-        printf("ctl_register id 0x%x, ref 0x%x \n", ctl_reg.ctl_id, ctl_ref);
-        ctl_registered = TRUE;
-    }
-    else
-    {
-        printf("ctl_register returned error %d\n", retval);
-        goto bail;
-    }
+//    result = ctl_register(&ctl_reg, &ctl_ref);
+//    if (result == 0) {
+//        printf("ctl_register id 0x%x, ref 0x%x \n", ctl_reg.ctl_id, (unsigned int) ctl_ref);
+//        ctl_registered = TRUE;
+//    }
+//    else
+//    {
+//        printf("ctl_register returned error %d\n", result);
+//        goto bail;
+//    }
+    
+    
     
     return result;
     
@@ -1496,7 +1462,7 @@ bail:
     return KERN_FAILURE;
 }
 
-kern_return_t Kernel_stop(kmod_info_t *ki, void *d)
+kern_return_t Tcpcrypt_stop(kmod_info_t *ki, void *d)
 {
     printf("tcpcrypt_stop\n");
     
@@ -1524,8 +1490,8 @@ kern_return_t Kernel_stop(kmod_info_t *ki, void *d)
     }
     
     // deregister kernel control
-    if (ctl_registered)
-        ctl_deregister(ctl_ref);
+//    if (ctl_registered)
+//        ctl_deregister(ctl_ref);
     
     // ensure filter is detached before we return
     //    if (!ip_filter_detached)

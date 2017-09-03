@@ -9,14 +9,22 @@
 #ifndef common_h
 #define common_h
 
-#define TCPCRYPT_BUNDLE_ID  "com.tcpcrypt"
-#define TCPCRYPT_MAX_PRF    32
-#define MAX_NONCE   48
+#define TCPCRYPT_BUNDLE_ID "com.tcpcrypt"
+#define TCPCRYPT_MAX_PRF 32
+#define CTL_SEND_BUFFER_SIZE (8 * 1024)
+#define CTL_RCV_BUFFER_SIZE (8 * 1024)
+#define MAX_NONCE 48
 #define MAX_CIPHERS 8
 #define MAX_SS  32
 
 enum ctl_action {
-    INIT_KEY
+    INIT_TI,
+    INIT_PKEY
+};
+
+struct ctl_data {
+    enum ctl_action c_action;
+    void *c_data;
 };
 
 enum {
@@ -114,11 +122,9 @@ struct tcpcrypt_info {
     int ti_pub_cipher_list_len;
     struct ti_scipher ti_sym_cipher_list[MAX_CIPHERS];
     int ti_sym_cipher_list_len;
-};
-
-struct ctl_queue_entry {
-    enum ctl_action action;
-    mbuf_t data;
+    
+    // ctl
+    int ti_ciphers_init;
 };
 
 #endif /* common_h */

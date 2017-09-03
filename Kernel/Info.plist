@@ -26,8 +26,6 @@
 		<string>15.6</string>
 		<key>com.apple.kpi.libkern</key>
 		<string>15.6</string>
-		<key>com.apple.kpi.iokit</key>
-		<string>15.6</string>
 	</dict>
 </dict>
 </plist>

@@ -6,23 +6,22 @@
 //  Copyright © 2017 Romeo Bellon. All rights reserved.
 //
 
+#include <mach/mach_types.h>
 #include <netinet/kpi_ipfilter.h>
 #include <libkern/libkern.h> // printf
 #include <libkern/OSMalloc.h>
-#include <string.h>
 #include <kern/assert.h>
-#include <mach/mach_types.h>
 #include <sys/kernel_types.h>
 #include <sys/kpi_mbuf.h>
 #include <netinet/ip.h>
 #include <netinet/tcp.h>
 #include <sys/systm.h>
 #include <sys/kern_control.h>
+#include <string.h>
 
 #ifndef tcpcrypt_h
 #define tcpcrypt_h
 
-#include "crypto.h"
 #include "checksum.h"
 #include "ctl.h"
 #include "common.h"
@@ -31,14 +30,6 @@
 #define TCPOPT_EXP  253
 #define EXID_ENO    0x454E
 #define TC_MTU  1500 // 1500 max allowed by Ethernet at the network layer
-
-// mutex locks
-extern lck_mtx_t *ciphers_list_mutex;
-lck_mtx_t *ciphers_mutex;
-lck_mtx_t *connections_queue_mtx;
-lck_grp_t *mtx_grp;
-
-extern lck_mtx_t *ctl_list_mutex;
 
 // PKEY
 enum {
@@ -189,23 +180,20 @@ struct crypt_alg {
     void    *ca_priv;
 };
 
-/**
- Session struct
- */
-struct ti_sess {
-    TAILQ_ENTRY(ti_sess) ts_next;
-    struct crypt_pub    *ts_pub;
-    struct crypt_sym    *ts_sym;
-    struct crypt_alg    ts_mac;
-    struct stuff        ts_sid;
-    struct stuff        ts_nk;
-    struct stuff        ts_mk;
-    uint8_t        ts_pub_spec;
-    int            ts_role;
-    struct in_addr        ts_ip;
-    int            ts_port;
-    int            ts_dir; // direction
-    int            ts_used; // session used: when STATE_NEXTK1_SENT then ts_used = 1
+struct session {
+    TAILQ_ENTRY(session) s_next;
+    struct crypt_pub    *s_pub;
+    struct crypt_sym    *s_sym;
+    struct crypt_alg    s_mac;
+    struct stuff    s_sid;
+    struct stuff    s_nk;
+    struct stuff    s_mk;
+    uint8_t         s_pub_spec;
+    int             s_role;
+    struct in_addr  s_ip;
+    int             s_port;
+    int             s_dir; // direction
+    int             s_used; // session used: when STATE_NEXTK1_SENT then ts_used = 1
 };
 
 struct connection {
@@ -217,6 +205,7 @@ struct connection {
 // Tag for use with OSMalloc calls, used to associate memory allocations
 extern OSMallocTag malloc_tag;
 
-extern TAILQ_HEAD(, connection) connections_queue;
+extern TAILQ_HEAD(connections_queue_head, connection) connections_queue;
+extern TAILQ_HEAD(sessions_queue_head, session) sessions_queue;
 
 #endif /* tcpcrypt_h */
