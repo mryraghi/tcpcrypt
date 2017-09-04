@@ -95,17 +95,23 @@ static void init_pkey(struct tcpcrypt_info *ti)
 //    lck_mtx_unlock(ciphers_mutex);
 }
 
-static void print(struct ctl_data *ctl_data)
+static void handle_ctl_data(struct ctl_data *ctl_data)
 {
+    printf("been here\n");
     switch (ctl_data->c_action) {
         case INIT_TI:
-            init_ti((struct tcpcrypt_info *) &ctl_data->c_data);
+//            init_ti((struct tcpcrypt_info *) &ctl_data->c_data);
             break;
-            
+
         case INIT_PKEY:
-            init_pkey((struct tcpcrypt_info *) &ctl_data->c_data);
+//            init_pkey((struct tcpcrypt_info *) &ctl_data->c_data);
             break;
-            
+
+        case TEST:
+//            printf("--> direction %d, size %lu", ctl_data->c_ti->ti_dir, sizeof(ctl_data->c_ti));
+            printf("received data: dir %d\n", ctl_data->c_ti.ti_dir);
+            break;
+
         default:
             break;
     }
@@ -114,7 +120,7 @@ static void print(struct ctl_data *ctl_data)
 static void SignalHandler(int sigraised)
 {
     // printf may be unsupported function call from a signal handler
-    printf("Tcpcrypt interrupted - %d\n", sigraised);
+    printf("\nTcpcrypt interrupted - %d\n", sigraised);
 
     if (so > 0)
     {
@@ -132,7 +138,7 @@ static void usage(const char *s)
 {
     printf("Tcpcrypt usage: %s [-m] [-v] [-s] [-q] [-Q max] [-E] [-F]\n\n", s);
     
-    printf("tcplog is used to control the tcplognke kernel extension\n");
+    printf("tcpcrypt is used to control the Tcpcrypt kernel extension.\n");
     printf("The command takes the following options that are evaluated in order, \n");
     printf("and several options may be combined:\n");
     printf(" %-10s%s\n", "-h", "display this help and exit");
@@ -192,7 +198,7 @@ int main(int argc, char * const *argv)
      * client’s perspective, the unit number is unused.
      */
     if (ioctl(so, CTLIOCGINFO, &ctl_info) == -1) {
-        printf("ioctl: couldn't connect to the kernel extension\n\n");
+        printf("ioctl: couldn't connect to the kernel extension\n");
         exit(0);
     } else
         printf("ctl_id: 0x%x for ctl_name: %s\n", ctl_info.ctl_id, ctl_info.ctl_name);
@@ -206,42 +212,43 @@ int main(int argc, char * const *argv)
     addr.sc_unit = 0;
     
     // associate the socket with a particular kernel control
-    result = connect(so, (struct sockaddr *)&addr, sizeof(struct sockaddr_ctl));
-    if (result) {
-        fprintf(stderr, "connect failed %d\n", result);
+    if (connect(so, (struct sockaddr *)&addr, sizeof(struct sockaddr_ctl))) {
+        perror("connect");
         exit(0);
     }
     
+    printf("sizeof(ctl_data) %lu, action %lu\n", sizeof(ctl_data), sizeof(ctl_data.c_action));
+    
     while ((n = recv(so, &ctl_data, sizeof(ctl_data), 0)) == sizeof(ctl_data))
     {
-        print(&ctl_data);
+        handle_ctl_data(&ctl_data);
     }
     
     // init locks
-    pthread_mutex_t ciphers_list_mutex = PTHREAD_MUTEX_INITIALIZER;
-    pthread_mutex_init(&ciphers_list_mutex, NULL);
-    
-    struct ciphers_list_head ciphers_list;
-    struct ciphers_pkey_head ciphers_pkey;
-    struct ciphers_sym_head ciphers_sym;
-    
-    // init queues
-    TAILQ_INIT(&ciphers_list);
-    TAILQ_INIT(&ciphers_pkey);
-    TAILQ_INIT(&ciphers_sym);
-    
-    init_ciphers((void *) &ciphers_pkey, TYPE_PKEY);
-    init_ciphers((void *) &ciphers_sym, TYPE_SYM);
-    do_add_ciphers(&ciphers_pkey, TYPE_PKEY, &_pkey, &_pkey_len, sizeof(*_pkey),
-                   (uint8_t *) _pkey + sizeof(_pkey));
-    do_add_ciphers(&ciphers_sym, TYPE_PKEY, &_sym, &_sym_len, sizeof(*_sym),
-                   (uint8_t *) _sym + sizeof(_sym));
-    
-    // register ciphers pkey and sym
-    register_ciphers();
-    
-    // setup ciphers
-    setup_ciphers();
+//    pthread_mutex_t ciphers_list_mutex = PTHREAD_MUTEX_INITIALIZER;
+//    pthread_mutex_init(&ciphers_list_mutex, NULL);
+//    
+//    struct ciphers_list_head ciphers_list;
+//    struct ciphers_pkey_head ciphers_pkey;
+//    struct ciphers_sym_head ciphers_sym;
+//    
+//    // init queues
+//    TAILQ_INIT(&ciphers_list);
+//    TAILQ_INIT(&ciphers_pkey);
+//    TAILQ_INIT(&ciphers_sym);
+//    
+//    init_ciphers((void *) &ciphers_pkey, TYPE_PKEY);
+//    init_ciphers((void *) &ciphers_sym, TYPE_SYM);
+//    do_add_ciphers(&ciphers_pkey, TYPE_PKEY, &_pkey, &_pkey_len, sizeof(*_pkey),
+//                   (uint8_t *) _pkey + sizeof(_pkey));
+//    do_add_ciphers(&ciphers_sym, TYPE_PKEY, &_sym, &_sym_len, sizeof(*_sym),
+//                   (uint8_t *) _sym + sizeof(_sym));
+//    
+//    // register ciphers pkey and sym
+//    register_ciphers();
+//    
+//    // setup ciphers
+//    setup_ciphers();
 
     close(so);
     so = -1;

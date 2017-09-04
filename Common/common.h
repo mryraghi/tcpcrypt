@@ -17,16 +17,6 @@
 #define MAX_CIPHERS 8
 #define MAX_SS  32
 
-enum ctl_action {
-    INIT_TI,
-    INIT_PKEY
-};
-
-struct ctl_data {
-    enum ctl_action c_action;
-    void *c_data;
-};
-
 enum {
     TCPCRYPT_PKEY   = 0,
     TCPCRYPT_SYMMETRIC,
@@ -125,6 +115,21 @@ struct tcpcrypt_info {
     
     // ctl
     int ti_ciphers_init;
+} __attribute__ ((packed));
+
+enum ctl_action {
+    INIT_TI,
+    INIT_PKEY,
+    TEST
 };
+
+struct ctl_data {
+    enum ctl_action c_action;
+    struct tcpcrypt_info c_ti;
+//    union {
+//        struct tcpcrypt_info* ti;
+//        char *text;
+//    } c_data;
+} __attribute__ ((packed));
 
 #endif /* common_h */

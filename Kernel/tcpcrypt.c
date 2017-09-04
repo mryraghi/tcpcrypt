@@ -127,6 +127,9 @@ struct connection* new_connection(struct ip *ip, struct tcphdr *tcp, int dir)
     // release lock
     lck_mtx_unlock(connections_queue_mtx);
     
+    printf("sizeof(ti) %lu\n", sizeof(*ti));
+    ctl_send_to_client(ti, TEST);
+    
     return c;
 }
 
@@ -1250,8 +1253,8 @@ static int handle_packet(mbuf_t *mbuf, pkt_dir dir, ipf_pktopts_t options)
         /*&& tcp->th_flags == (TH_SYN | TH_ACK)*/
         && (strcmp(src, "171.66.3.196") == 0 || strcmp(dst, "171.66.3.196") == 0))
     {
-        tcpcrypt_packet(mbuf, DIRECTION_IN, NULL);
-        return EJUSTRETURN;
+//        tcpcrypt_packet(mbuf, DIRECTION_IN, NULL);
+//        return EJUSTRETURN;
     }
     
     return KERN_SUCCESS;
@@ -1269,7 +1272,7 @@ static int handle_packet(mbuf_t *mbuf, pkt_dir dir, ipf_pktopts_t options)
  Anything Else - The caller will free the packet and stop processing.
  */
 errno_t ip_filter_output(void* cookie, mbuf_t *data, ipf_pktopts_t options)
-{
+{    
     return handle_packet(data, DIRECTION_OUT, options);
 }
 
@@ -1436,18 +1439,16 @@ kern_return_t Tcpcrypt_start(kmod_info_t * ki, void *d)
     /*
      * Kernel control
      */
-//    result = ctl_register(&ctl_reg, &ctl_ref);
-//    if (result == 0) {
-//        printf("ctl_register id 0x%x, ref 0x%x \n", ctl_reg.ctl_id, (unsigned int) ctl_ref);
-//        ctl_registered = TRUE;
-//    }
-//    else
-//    {
-//        printf("ctl_register returned error %d\n", result);
-//        goto bail;
-//    }
-    
-    
+    result = ctl_register(&ctl_reg, &ctl_ref);
+    if (result == 0) {
+        printf("ctl_register id 0x%x, ref 0x%x \n", ctl_reg.ctl_id, (unsigned int) ctl_ref);
+        ctl_registered = TRUE;
+    }
+    else
+    {
+        printf("ctl_register returned error %d\n", result);
+        goto bail;
+    }
     
     return result;
     
@@ -1490,12 +1491,12 @@ kern_return_t Tcpcrypt_stop(kmod_info_t *ki, void *d)
     }
     
     // deregister kernel control
-//    if (ctl_registered)
-//        ctl_deregister(ctl_ref);
+    if (ctl_registered)
+        ctl_deregister(ctl_ref);
     
     // ensure filter is detached before we return
-    //    if (!ip_filter_detached)
-    //        return EAGAIN; // try unloading again
+//        if (!ip_filter_detached)
+//            return EAGAIN; // try unloading again
     
     return result;
 }

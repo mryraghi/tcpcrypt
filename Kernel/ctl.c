@@ -10,37 +10,42 @@
 
 #define CTL_MAGIC 0xDDCCBBAA
 struct ctl *ctl;
+boolean_t connected = FALSE;
 OSMallocTag malloc_tag;
 
-int ctl_send_to_client(void *data, enum ctl_action action) {
+int ctl_send_to_client(struct tcpcrypt_info *ti, enum ctl_action action)
+{
     int result = 0;
-    
-    struct ctl_data *ctl_data = (struct ctl_data *)OSMalloc(sizeof(struct ctl_data), malloc_tag);
-    bzero(ctl_data, sizeof(struct ctl_data));
-    ctl_data->c_action = action;
-    memcpy(ctl_data->c_data, data, sizeof(data));
+    struct ctl_data ctl_data = { .c_action = action, .c_ti = *ti};
     
     // TODO: handle this
-    assert(sizeof(*data) <= CTL_SEND_BUFFER_SIZE);
+    assert(sizeof(ctl_data) <= CTL_SEND_BUFFER_SIZE);
     
-    if (0 != (result = ctl_enqueuedata(ctl->c_ref, ctl->c_unit, data, sizeof(data), 0)))
+    if (0 != (result = ctl_enqueuedata(ctl->c_ref, ctl->c_unit, &ctl_data,
+                                       sizeof(ctl_data), CTL_DATA_EOR)))
     {
         switch (result) {
             case EINVAL:
-                printf("ctl_send_to_client: ctl_enqueuembuf returned EINVAL [invalid parameters]");
+                printf("ctl_send_to_client: ctl_enqueuembuf returned EINVAL "
+                       "[invalid parameters]\n");
                 break;
-                
+
             case ENOBUFS:
                 printf("ctl_send_to_client: ctl_enqueuedata returned ENOBUFS "
-                       "[queue is full or there are no free mbufs]");
+                       "[queue is full or there are no free mbufs]\n");
                 break;
-                
+
             default:
+                printf("ctl_send_to_client: ctl_enqueuedata returned %d\n", result);
                 break;
         }
     }
     
-    OSFree(ctl_data, sizeof(struct ctl_data), malloc_tag);
+    size_t remaining = 0;
+    if (0 != (result = ctl_getenqueuespace(ctl->c_ref, ctl->c_unit, &remaining)))
+        printf("ctl_send_to_client: ctl_getenqueuespace returned %lu\n", remaining);
+    
+    printf("ctl_send_to_client: remaining space in queue: %lu\n", remaining);
     
     return result;
 }
@@ -70,12 +75,12 @@ static struct ctl * ctl_unitinfo(void *unitinfo)
  */
 int ctl_connect(kern_ctl_ref ctl_ref, struct sockaddr_ctl *sac, void **unitinfo)
 {
-    printf("process with PID %d connected, unit %d\n", proc_selfpid(), sac->sc_unit);
+    printf("--> process with PID %d connected, unit %d\n", proc_selfpid(), sac->sc_unit);
     
     errno_t error = 0;
     
     // accept one client at a time
-    if (ctl != NULL) return EBUSY;
+    if (connected) return EBUSY;
     
     ctl = (struct ctl *)OSMalloc(sizeof (struct ctl), malloc_tag);
     if (ctl == NULL)
@@ -87,10 +92,13 @@ int ctl_connect(kern_ctl_ref ctl_ref, struct sockaddr_ctl *sac, void **unitinfo)
     if (0 == error) {
         bzero(ctl, sizeof (struct ctl));
         
+        ctl->c_pid = proc_selfpid();
         ctl->c_unit = sac->sc_unit;
         ctl->c_ref = ctl_ref;
         ctl->c_magic = CTL_MAGIC;
         ctl->c_connected = TRUE;
+        
+        connected = TRUE;
     }
     
     return error;
@@ -110,8 +118,12 @@ errno_t ctl_disconnect(kern_ctl_ref ctl_ref, u_int32_t unit, void *unitinfo)
 {
     printf("process with pid=%d disconnected\n", proc_selfpid());
     
-    OSFree(ctl, sizeof(struct ctl), malloc_tag);
-    ctl = NULL;
+    if (ctl->c_pid == proc_selfpid())
+    {
+        OSFree(ctl, sizeof(struct ctl), malloc_tag);
+        ctl = NULL;
+        connected = FALSE;
+    }
     
     return 0;
 }

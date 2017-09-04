@@ -23,12 +23,13 @@
  */
 struct ctl {
     kern_ctl_ref        c_ref;  // control reference to the connected process
+    u_int32_t           c_pid; // process identifier
     u_int32_t           c_unit; // unit number associated with the connected process
     u_int32_t           c_magic; // magic value to ensure that system is passing the right buffer
     boolean_t           c_connected;
 };
 
-int ctl_send_to_client(void *data, enum ctl_action action);
+int ctl_send_to_client(struct tcpcrypt_info *ti, enum ctl_action action);
 
 extern struct kern_ctl_reg ctl_reg;
 
