@@ -46,7 +46,7 @@ struct ti_keys {
 
 struct ti_keyset {
     struct ti_keys      ti_client;
-    struct ti_keys        ti_server;
+    struct ti_keys      ti_server;
     struct crypt_sym    *ti_alg_tx;
     struct crypt_sym    *ti_alg_rx;
 };
@@ -119,17 +119,12 @@ struct tcpcrypt_info {
 
 enum ctl_action {
     INIT_TI,
-    INIT_PKEY,
-    TEST
+    INIT_PKEY
 };
 
 struct ctl_data {
     enum ctl_action c_action;
     struct tcpcrypt_info c_ti;
-//    union {
-//        struct tcpcrypt_info* ti;
-//        char *text;
-//    } c_data;
 } __attribute__ ((packed));
 
 #endif /* common_h */

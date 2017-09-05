@@ -28,17 +28,17 @@ enum type {
 };
 
 struct cipher {
-    TAILQ_ENTRY(cipher) c_next;
     u_int8_t    c_id;
     int         c_type;
     crypt_ctr   c_ctr;
+    struct cipher *c_next;
 };
 
 struct ciphers {
-    TAILQ_ENTRY(ciphers) c_next;
     struct cipher *c_cipher;
     unsigned char c_spec[4];
     int c_speclen;
+    struct ciphers *c_next;
 };
 
 // low-level interface
@@ -147,11 +147,11 @@ extern struct crypt *crypt_ECDHE521_new(void); // crypto_ecdhe.c
 extern struct crypt *crypt_AES128_new(void); // crypto_aes.c
 extern struct crypt *crypt_AES256_new(void); // crypto_aes.c
 
+extern struct cipher *get_ciphers(void);
 extern void crypt_register(int type, uint8_t id, crypt_ctr ctr);
 extern struct crypt *crypt_init(int sz);
 
-extern void do_add_ciphers(void *c_l, enum type type, void *spec, int *speclen, int sz, void *specend);
-extern void setup_ciphers(void);
-extern void init_ciphers(void *c_l, enum type type);
+extern void do_add_ciphers(struct ciphers *c, void *spec, int *speclen, int sz, void *specend);
+extern void init_cipher(struct ciphers *c);
 
 #endif /* crypto_h */

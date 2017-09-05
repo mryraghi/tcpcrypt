@@ -32,14 +32,4 @@ enum {
     TC_AES256_GCM = 0x02,
 };
 
-// List of ciphers per kind
-extern TAILQ_HEAD(ciphers_pkey_head, ciphers) ciphers_pkey;
-
-// List of ciphers per kind
-extern TAILQ_HEAD(ciphers_sym_head, ciphers) ciphers_sym;
-
-// List of different ciphers (TC_CIPHER_ECDHE_P256, TC_CIPHER_ECDHE_P521,
-// TC_AES128_GCM, TC_AES256_GCM)
-extern TAILQ_HEAD(ciphers_list_head, cipher) cipers_list;
-
 #endif /* tcpcrypt_h */

@@ -30,7 +30,22 @@ static int _pkey_len;
 static struct ti_scipher _sym[MAX_CIPHERS];
 static int _sym_len;
 
+struct ciphers ciphers_pkey;
+struct ciphers ciphers_sym;
+
 static int so = -1;
+
+static int ctl_set_option(struct tcpcrypt_info *ti, enum ctl_action action)
+{
+    printf("ctl_set_option, sending %zu\n", sizeof(*ti));
+    
+    int result = 0;
+    
+    if (send(so, ti, sizeof(*ti), 0) != sizeof(*ti))
+        return -1;
+    
+    return result;
+}
 
 static void do_random(void *p, int len) {
     uint8_t *x = p;
@@ -52,22 +67,14 @@ static void generate_nonce(struct tcpcrypt_info *ti, int len) {
 
 static void init_ti(struct tcpcrypt_info *ti)
 {
-    char dst[32], src[32];
+    ti->ti_ciphers_pkey = _pkey;
+    ti->ti_ciphers_pkey_len = _pkey_len;
+    ti->ti_ciphers_sym = _sym;
+    ti->ti_ciphers_sym_len = _sym_len;
+//    generate_nonce(ti, ti->ti_crypt_pub->cp_n_c);
     
-    bzero(dst, sizeof(dst));
-    bzero(src, sizeof(src));
-    
-    // converts the network address structure into a character string
-    inet_ntop(AF_INET, &ti->ti_dst_ip, dst, sizeof(dst));
-    inet_ntop(AF_INET, &ti->ti_dst_ip, src, sizeof(src));
-    
-    //    ti->ti_ciphers_pkey = _pkey;
-    //    ti->ti_ciphers_pkey_len = _pkey_len;
-    //    ti->ti_ciphers_sym = _sym;
-    //    ti->ti_ciphers_sym_len = _sym_len
-    // generate_nonce(ti, ti->ti_crypt_pub->cp_n_c)
-    
-    printf("init_key: src %s, dst %s", src, dst);
+    if (ctl_set_option(ti, INIT_TI))
+        perror("Error while setting option!\n");
 }
 
 static void init_pkey(struct tcpcrypt_info *ti)
@@ -97,24 +104,61 @@ static void init_pkey(struct tcpcrypt_info *ti)
 
 static void handle_ctl_data(struct ctl_data *ctl_data)
 {
-    printf("been here\n");
+    printf("been here ctl_data->c_action %d\n", ctl_data->c_action);
     switch (ctl_data->c_action) {
         case INIT_TI:
-//            init_ti((struct tcpcrypt_info *) &ctl_data->c_data);
+            init_ti(&ctl_data->c_ti);
             break;
 
         case INIT_PKEY:
+            printf("INIT_PKEY, direction %d\n", ctl_data->c_ti.ti_dir);
 //            init_pkey((struct tcpcrypt_info *) &ctl_data->c_data);
             break;
 
-        case TEST:
-//            printf("--> direction %d, size %lu", ctl_data->c_ti->ti_dir, sizeof(ctl_data->c_ti));
-            printf("received data: dir %d\n", ctl_data->c_ti.ti_dir);
-            break;
-
         default:
+            printf("handle_ctl_data: unknown action %d\n", ctl_data->c_action);
             break;
     }
+}
+
+static void do_register_cipher(struct ciphers *c, struct cipher *cl)
+{
+    struct ciphers *x;
+    
+    x = malloc(sizeof(*x));
+    bzero(x, sizeof(*x));
+    x->c_cipher = cl;
+    
+    while (c->c_next) {
+        c = c->c_next;
+    }
+    
+    // adding at the end
+    x->c_next = c->c_next;
+    c->c_next = x;
+    
+    printf("crypto: 0x%x registered\n", x->c_cipher->c_id);
+}
+
+void setup_cipher(struct cipher *c)
+{
+    int type = c->c_type;
+    
+    switch (type) {
+        case TYPE_PKEY:
+            do_register_cipher(&ciphers_pkey, c);
+            break;
+            
+        case TYPE_SYM:
+            do_register_cipher(&ciphers_sym, c);
+            break;
+            
+        default:
+            assert(!"Unknown type");
+            break;
+    }
+    
+    fflush(stdout);
 }
 
 static void SignalHandler(int sigraised)
@@ -157,7 +201,7 @@ int main(int argc, char * const *argv)
     sig_t old_handler;
     struct ctl_info ctl_info;
     struct sockaddr_ctl addr;
-    int result, c;
+    int c;
     ssize_t n;
     struct ctl_data ctl_data;
     
@@ -217,38 +261,39 @@ int main(int argc, char * const *argv)
         exit(0);
     }
     
-    printf("sizeof(ctl_data) %lu, action %lu\n", sizeof(ctl_data), sizeof(ctl_data.c_action));
+    // init locks
+    pthread_mutex_t ciphers_list_mutex = PTHREAD_MUTEX_INITIALIZER;
+    pthread_mutex_init(&ciphers_list_mutex, NULL);
+    
+    // register ciphers pkey and sym
+    register_ciphers();
+    
+    // add ciphers
+    struct cipher *ci = get_ciphers();
+    
+    while (ci) {
+        setup_cipher(ci);
+        ci = ci->c_next;
+    }
+    
+//    struct ciphers *cc = ciphers_pkey.c_next;
+//    while (cc->c_next) {
+//        printf("test --> type %d, cc->c_next type %d\n", cc->c_cipher->c_type, cc->c_next->c_cipher->c_type);
+//        cc = cc->c_next;
+//    }
+    
+    init_cipher(&ciphers_pkey);
+    init_cipher(&ciphers_sym);
+
+    do_add_ciphers(&ciphers_pkey, &_pkey, &_pkey_len, sizeof(*_pkey),
+                   (uint8_t *) _pkey + sizeof(_pkey));
+    do_add_ciphers(&ciphers_sym, &_sym, &_sym_len, sizeof(*_sym),
+                   (uint8_t *) _sym + sizeof(_sym));
     
     while ((n = recv(so, &ctl_data, sizeof(ctl_data), 0)) == sizeof(ctl_data))
     {
         handle_ctl_data(&ctl_data);
     }
-    
-    // init locks
-//    pthread_mutex_t ciphers_list_mutex = PTHREAD_MUTEX_INITIALIZER;
-//    pthread_mutex_init(&ciphers_list_mutex, NULL);
-//    
-//    struct ciphers_list_head ciphers_list;
-//    struct ciphers_pkey_head ciphers_pkey;
-//    struct ciphers_sym_head ciphers_sym;
-//    
-//    // init queues
-//    TAILQ_INIT(&ciphers_list);
-//    TAILQ_INIT(&ciphers_pkey);
-//    TAILQ_INIT(&ciphers_sym);
-//    
-//    init_ciphers((void *) &ciphers_pkey, TYPE_PKEY);
-//    init_ciphers((void *) &ciphers_sym, TYPE_SYM);
-//    do_add_ciphers(&ciphers_pkey, TYPE_PKEY, &_pkey, &_pkey_len, sizeof(*_pkey),
-//                   (uint8_t *) _pkey + sizeof(_pkey));
-//    do_add_ciphers(&ciphers_sym, TYPE_PKEY, &_sym, &_sym_len, sizeof(*_sym),
-//                   (uint8_t *) _sym + sizeof(_sym));
-//    
-//    // register ciphers pkey and sym
-//    register_ciphers();
-//    
-//    // setup ciphers
-//    setup_ciphers();
 
     close(so);
     so = -1;

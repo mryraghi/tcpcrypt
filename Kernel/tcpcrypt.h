@@ -51,7 +51,7 @@ struct tcpopt_eno {
     uint8_t     toe_kind; // SYN: 253
     uint8_t     toe_len;
     uint16_t    toe_exid; // SYN: 0x454E
-    uint8_t     toe_opts[0];
+    uint8_t     toe_opts[2];
 } __attribute__ ((__packed__));
 
 /*

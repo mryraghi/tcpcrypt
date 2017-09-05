@@ -65,6 +65,9 @@ static void set_eno(struct tcpopt_eno *eno, int len)
     eno->toe_kind = TCPOPT_EXP;
     eno->toe_len = len;
     eno->toe_exid = htons(EXID_ENO);
+    
+    eno->toe_opts[0] = TC_CIPHER_ECDHE_P256;
+    eno->toe_opts[1] = TC_CIPHER_ECDHE_P521;
 }
 
 static void ti_init(struct tcpcrypt_info *ti)
@@ -80,10 +83,12 @@ static void ti_init(struct tcpcrypt_info *ti)
     ti->ti_nocache = tc_conf.tc_nocache;
     ti->ti_ciphers_init = 0;
     
+    printf("ti_init\n");
+    
     // if couldn't initiate ti and its ciphers then disable tcpcrypt
     // TODO: could try again
-//    if (0 != (result = ctl_send_to_client((void *) ti, INIT_TI)))
-//        ti->ti_state = STATE_DISABLED;
+    if (0 != (result = ctl_send_to_client(ti, INIT_TI)))
+        ti->ti_state = STATE_DISABLED;
 }
 
 static int connected(struct tcpcrypt_info *ti) {
@@ -126,9 +131,6 @@ struct connection* new_connection(struct ip *ip, struct tcphdr *tcp, int dir)
     
     // release lock
     lck_mtx_unlock(connections_queue_mtx);
-    
-    printf("sizeof(ti) %lu\n", sizeof(*ti));
-    ctl_send_to_client(ti, TEST);
     
     return c;
 }
@@ -525,8 +527,8 @@ static errno_t do_output_closed(struct ip *ip, struct tcphdr *tcp, struct tcpcry
     //    uint8_t *p;
     int len;
     
-    //    if (tcp->th_flags != TH_SYN)
-    //        return NKE_ACCEPT;
+    if (tcp->th_flags != TH_SYN)
+        return NKE_ACCEPT;
     
     //    if (!ts && !ti->ti_nocache)
     //        ts = session_find_host(ti, &ip->ip_dst, tcp->th_dport);
@@ -558,7 +560,7 @@ static errno_t do_output_closed(struct ip *ip, struct tcphdr *tcp, struct tcpcry
      * Set ENO
      */
     set_eno(eno, len);
-    memcpy(eno->toe_opts, ti->ti_ciphers_pkey, ti->ti_ciphers_pkey_len);
+//    memcpy(eno->toe_opts, ti->ti_ciphers_pkey, ti->ti_ciphers_pkey_len);
     
     //    p = eno->toe_opts + ti->ti_ciphers_pkey_len;
     
@@ -685,7 +687,7 @@ static int do_output(struct ip *ip, struct tcphdr *tcp, struct tcpcrypt_info *ti
     
     printf("ti->ti_state: %d\n", ti->ti_state);
     
-    //    tcp_result = do_tcp_output(ip, tcp, ti);
+    tcp_result = do_tcp_output(ip, tcp, ti);
     
     /* an RST half way through the handshake */
     //    if (ti->ti_tcp_state == TCPSTATE_DEAD && !connected(ti))
@@ -703,7 +705,7 @@ static int do_output(struct ip *ip, struct tcphdr *tcp, struct tcpcrypt_info *ti
         case STATE_PKCONF_SENT:
             /* reTX of syn ack, or ACK (role switch) */
         case STATE_HELLO_RCVD:
-            //            result = do_output_hello_rcvd(ip, tcp, ti);
+            //                        result = do_output_hello_rcvd(ip, tcp, ti);
             break;
             
         case STATE_NEXTK2_SENT:
@@ -715,7 +717,7 @@ static int do_output(struct ip *ip, struct tcphdr *tcp, struct tcpcrypt_info *ti
             break;
             
         case STATE_PKCONF_RCVD:
-//            result = do_output_pkconf_rcvd(ti, ip, tcp, 0);
+            //            result = do_output_pkconf_rcvd(ti, ip, tcp, 0);
             break;
             
         case STATE_INIT1_RCVD:
@@ -723,8 +725,8 @@ static int do_output(struct ip *ip, struct tcphdr *tcp, struct tcpcrypt_info *ti
             break;
             
         case STATE_INIT1_SENT:
-            //            if (!is_init(ip, tcp, TC_INIT1))
-            //                result = do_output_pkconf_rcvd(tc, ip, tcp, 1);
+            //  if (!is_init(ip, tcp, TC_INIT1))
+            //  result = do_output_pkconf_rcvd(tc, ip, tcp, 1);
             break;
             
         case STATE_INIT2_SENT:
@@ -994,16 +996,16 @@ static int do_input_hello_sent(struct ip *ip, struct tcphdr *tcp,
     
     /* XXX truncate len as it could go to the variable options (like SID) */
     
-    if (!negotiate_cipher(ti, cipher, len)) {
-        printf("do_input_hello_sent > negotiate_cipher: no cipher\n");
-        ti->ti_state = STATE_DISABLED;
-        
-        return NKE_ACCEPT;
-    }
+//    if (!negotiate_cipher(ti, cipher, len)) {
+//        printf("do_input_hello_sent > negotiate_cipher: no cipher\n");
+//        ti->ti_state = STATE_DISABLED;
+//
+//        return NKE_ACCEPT;
+//    }
     
     // set_eno_transcript(tc, tcp);
     
-    init_pkey(ti);
+//    init_pkey(ti);
     
     ti->ti_state = STATE_PKCONF_RCVD;
     
@@ -1158,34 +1160,33 @@ static void tcpcrypt_packet(mbuf_t *mbuf, pkt_dir dir, ipf_pktopts_t options)
         printf("INFO - handle_packet, tcpcrypt connection NOT found\n");
         c = new_connection(ip, tcp, dir);
     }
-    else
-    {
-        // DIRECTION_OUT
-        if (dir)
-        {
-            
-            //            // discard non SYN packets
-            //            // but continue if connection has been already saved but it's
-            //            // a SYN packet again, since it's probably a retransmission
-            //            if (c->c_ti->ti_state != STATE_DISABLED && !(tcp->th_flags == TH_SYN))
-            //            {
-            //                printf("INFO - handle_packet, found connection != STATE_DISABLED\n");
-            //                return KERN_SUCCESS;
-            //            }
-            
-            //            reinject_packet(mbuf, packet, ntohs(ip->ip_len), dir, options);
-            //            goto sent;
-        }
-        else // DIRECTION_IN
-        {
-            //            printf("-> state of incoming packet with saved connection: %d\n", c->c_ti->ti_state);
-            //            if (c->c_ti->ti_state != STATE_HELLO_SENT)
-            //            {
-            //                reinject_packet(mbuf, packet, ntohs(ip->ip_len), dir, options);
-            //                goto sent;
-            //            }
-        }
-    }
+//    else
+//    {
+//        // DIRECTION_OUT
+//        if (dir)
+//        {
+//            // discard non SYN packets
+//            // but continue if connection has been already saved but it's
+//            // a SYN packet again, since it's probably a retransmission
+//            if (c->c_ti->ti_state != STATE_DISABLED && !(tcp->th_flags == TH_SYN))
+//            {
+//                printf("INFO - handle_packet, found connection != STATE_DISABLED\n");
+//                return;
+//            }
+//
+////            reinject_packet(mbuf, packet, ntohs(ip->ip_len), dir, options);
+////            goto sent;
+//        }
+//        else // DIRECTION_IN
+//        {
+//            if (c->c_ti->ti_state != STATE_HELLO_SENT)
+//            {
+//                reinject_packet(mbuf, packet, ntohs(ip->ip_len), dir, options);
+////                goto sent;
+//                return;
+//            }
+//        }
+//    }
     
     // save direction and init csum
     c->c_ti->ti_dir_packet = dir;
@@ -1194,12 +1195,12 @@ static void tcpcrypt_packet(mbuf_t *mbuf, pkt_dir dir, ipf_pktopts_t options)
     // IN/OUT
     if (dir)
         result = do_output(ip, tcp, c->c_ti);
-    else
-        result = do_input(ip, tcp, c->c_ti);
+//    else
+//        result = do_input(ip, tcp, c->c_ti);
     
     // recompute TCP checksum
-//    if (result == NKE_MODIFY)
-//        checksum_tcp(ip, tcp);
+    if (result == NKE_MODIFY)
+        checksum_tcp(ip, tcp);
     
     // handle packet normally
     // TODO: NOT GOOD, do a BACKUP of the original packet, and reinject that one
@@ -1208,9 +1209,9 @@ static void tcpcrypt_packet(mbuf_t *mbuf, pkt_dir dir, ipf_pktopts_t options)
     
     // if connection has been marked as dead or disabled,
     // then remove connection from saved ones
-    //    if (c->c_ti->ti_tcp_state == TCPSTATE_DEAD
-    //        || c->c_ti->ti_state == STATE_DISABLED)
-    //        remove_connection(ip, tcp, dir);
+    if (c->c_ti->ti_tcp_state == TCPSTATE_DEAD
+        || c->c_ti->ti_state == STATE_DISABLED)
+        remove_connection(ip, tcp, dir);
     
     reinject_packet(mbuf, packet, ntohs(ip->ip_len), dir, options);
     goto sent;
@@ -1253,8 +1254,8 @@ static int handle_packet(mbuf_t *mbuf, pkt_dir dir, ipf_pktopts_t options)
         /*&& tcp->th_flags == (TH_SYN | TH_ACK)*/
         && (strcmp(src, "171.66.3.196") == 0 || strcmp(dst, "171.66.3.196") == 0))
     {
-//        tcpcrypt_packet(mbuf, DIRECTION_IN, NULL);
-//        return EJUSTRETURN;
+        tcpcrypt_packet(mbuf, DIRECTION_IN, NULL);
+        return EJUSTRETURN;
     }
     
     return KERN_SUCCESS;
@@ -1489,6 +1490,9 @@ kern_return_t Tcpcrypt_stop(kmod_info_t *ki, void *d)
             malloc_tag = NULL;
         }
     }
+    
+    // free ctl struct in case clients are connected
+    free_ctl();
     
     // deregister kernel control
     if (ctl_registered)

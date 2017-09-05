@@ -16,36 +16,36 @@ OSMallocTag malloc_tag;
 int ctl_send_to_client(struct tcpcrypt_info *ti, enum ctl_action action)
 {
     int result = 0;
+    size_t remaining = 0;
     struct ctl_data ctl_data = { .c_action = action, .c_ti = *ti};
     
-    // TODO: handle this
-    assert(sizeof(ctl_data) <= CTL_SEND_BUFFER_SIZE);
+    if (0 != (result = ctl_getenqueuespace(ctl->c_ref, ctl->c_unit, &remaining)))
+        printf("ctl_send_to_client: ctl_getenqueuespace returned %d\n", result);
     
-    if (0 != (result = ctl_enqueuedata(ctl->c_ref, ctl->c_unit, &ctl_data,
-                                       sizeof(ctl_data), CTL_DATA_EOR)))
+    printf("ctl_send_to_client: remaining space in queue: %d\n", (int)remaining);
+    
+    if (sizeof(ctl_data) <= remaining)
     {
-        switch (result) {
-            case EINVAL:
-                printf("ctl_send_to_client: ctl_enqueuembuf returned EINVAL "
-                       "[invalid parameters]\n");
-                break;
-
-            case ENOBUFS:
-                printf("ctl_send_to_client: ctl_enqueuedata returned ENOBUFS "
-                       "[queue is full or there are no free mbufs]\n");
-                break;
-
-            default:
-                printf("ctl_send_to_client: ctl_enqueuedata returned %d\n", result);
-                break;
+        if (0 != (result = ctl_enqueuedata(ctl->c_ref, ctl->c_unit, &ctl_data,
+                                           sizeof(ctl_data), CTL_DATA_EOR)))
+        {
+            switch (result) {
+                case EINVAL:
+                    printf("ctl_send_to_client: ctl_enqueuembuf returned EINVAL "
+                           "[invalid parameters]\n");
+                    break;
+                    
+                case ENOBUFS:
+                    printf("ctl_send_to_client: ctl_enqueuedata returned ENOBUFS "
+                           "[queue is full or there are no free mbufs]\n");
+                    break;
+                    
+                default:
+                    printf("ctl_send_to_client: ctl_enqueuedata returned %d\n", result);
+                    break;
+            }
         }
     }
-    
-    size_t remaining = 0;
-    if (0 != (result = ctl_getenqueuespace(ctl->c_ref, ctl->c_unit, &remaining)))
-        printf("ctl_send_to_client: ctl_getenqueuespace returned %lu\n", remaining);
-    
-    printf("ctl_send_to_client: remaining space in queue: %lu\n", remaining);
     
     return result;
 }
@@ -128,6 +128,43 @@ errno_t ctl_disconnect(kern_ctl_ref ctl_ref, u_int32_t unit, void *unitinfo)
     return 0;
 }
 
+int ctl_send(kern_ctl_ref kctlref, u_int32_t unit, void *unitinfo, mbuf_t m, int flags)
+{
+    int error = 0;
+    mbuf_t old_packet = m;
+    uint32_t packet_bytes = 0;
+    unsigned char packet[CTL_RCV_BUFFER_SIZE];
+    struct tcpcrypt_info *ti;
+    
+    // get length of packet
+    do
+    {
+        packet_bytes += mbuf_len(old_packet);
+        old_packet = mbuf_next(old_packet);
+    } while (old_packet != NULL);
+
+    
+    // zero packet
+    bzero(&packet, packet_bytes);
+    
+    printf("ctl_send... %d\n", packet_bytes);
+    
+    if (mbuf_flags(m) & MBUF_EXT)
+        printf("has external storage\n");
+    
+    // copy data to local buffer
+    if (0 != (error = mbuf_copydata(m, 0, packet_bytes, packet)))
+        printf("ERROR - mbuf_copydata returned %d\n", error);
+    
+    ti = (struct tcpcrypt_info *) packet;
+    
+    printf("ctl_send mbuf data algo %u\n", ti->ti_ciphers_sym->sc_algo);
+    
+    mbuf_freem(m);
+    
+    return error;
+}
+
 /**
  The ctl_getopt_func is used to handle client get socket option requests for the SYSPROTO_CONTROL
  option level. A buffer is allocated for storage and passed to the function. The length of that
@@ -179,11 +216,11 @@ int ctl_get(kern_ctl_ref ctl_ref, u_int32_t unit, void *unitinfo, int opt, void 
             break;
     }
     
-    if (error == 0) {
-        *len = valsize;
-        if (data != NULL)
-            bcopy(buf, data, valsize);
-    }
+    //    if (error == 0) {
+    //        *len = valsize;
+    //        if (data != NULL)
+    //            bcopy(buf, data, valsize);
+    //    }
     
     return error;
 }
@@ -204,61 +241,36 @@ int ctl_get(kern_ctl_ref ctl_ref, u_int32_t unit, void *unitinfo, int opt, void 
 int ctl_set(kern_ctl_ref ctl_ref, u_int32_t unit, void *unitinfo, int opt, void *data, size_t len)
 {
     int error = 0;
-    int result;
+    enum ctl_action action = (enum ctl_action) opt;
     
-    printf("ctl_set - opt is %d\n", opt);
-    
-    switch (opt)
+    switch (action)
     {
-            //        case TCPLOGGER_QMAX:
-            //            if (len < sizeof(int)) {
-            //                error = EINVAL;
-            //                break;
-            //            }
-            //            intval = *(int *)data;
-            //
-            //            lck_mtx_lock(gmutex);
-            //            if (intval >= 0)
-            //                tl_stats.tls_qmax = intval;
-            //            else
-            //                tl_stats.tls_qmax = TCPLOGGER_QMAX_DEFAULT;
-            //            lck_mtx_unlock(gmutex);
-            //            break;
-            //
-            //        case TCPLOGGER_ENABLED:
-            //            if (len < sizeof(int)) {
-            //                error = EINVAL;
-            //                break;
-            //            }
-            //            intval = *(int *)data;
-            //            lck_mtx_lock(gmutex);
-            //            tl_stats.tls_enabled = intval ? 1 : 0;
-            //            lck_mtx_unlock(gmutex);
-            //            break;
-            //
-            //        case TCPLOGGER_LOG:
-            //            if (len < sizeof(int)) {
-            //                error = EINVAL;
-            //                break;
-            //            }
-            //
-            //            intval = *(int *)data;
-            //            lck_mtx_lock(gmutex);
-            //            tl_stats.tls_log = intval ? 1 : 0;
-            //            lck_mtx_unlock(gmutex);
-            //            break;
-            //
-            //        case TCPLOGGER_FLUSH:
-            //            // don't set mutex here as it will be set in tl_flush_backlog
-            //            tl_flush_backlog(FALSE);
-            //            break;
+        case INIT_TI:
+        {
+            struct tcpcrypt_info *ti = (struct tcpcrypt_info *)OSMalloc(sizeof(data), malloc_tag);
+            ti = (struct tcpcrypt_info *) data;
+            printf("ctl_set: received setsockopt INIT_TI, algo %d\n", ti->ti_ciphers_sym->sc_algo);
+            OSFree(ti, sizeof(ti), malloc_tag);
+            break;
+        }
             
         default:
+            printf("ctl_set - action is %d\n", action);
             error = ENOTSUP;
             break;
     }
     
     return error;
+}
+
+void free_ctl(void)
+{
+    if (ctl)
+    {
+        OSFree(ctl, sizeof(struct ctl), malloc_tag);
+        ctl = NULL;
+        connected = FALSE;
+    }
 }
 
 struct kern_ctl_reg ctl_reg = {
@@ -270,7 +282,7 @@ struct kern_ctl_reg ctl_reg = {
     CTL_RCV_BUFFER_SIZE,    // override receive buffer size
     ctl_connect,        // called when a connection request is accepted
     ctl_disconnect,     // called when a connection becomes disconnected
-    NULL,               // ctl_send_func - handles data sent from the client to kernel control
+    ctl_send,           // ctl_send_func - handles data sent from the client to kernel control
     ctl_set,            // called when the user process makes the setsockopt call
     ctl_get             // called when the user process makes the getsockopt call
 };

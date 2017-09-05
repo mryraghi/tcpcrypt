@@ -30,6 +30,7 @@ struct ctl {
 };
 
 int ctl_send_to_client(struct tcpcrypt_info *ti, enum ctl_action action);
+void free_ctl(void);
 
 extern struct kern_ctl_reg ctl_reg;
 
