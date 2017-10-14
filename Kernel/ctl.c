@@ -134,6 +134,7 @@ int ctl_send(kern_ctl_ref kctlref, u_int32_t unit, void *unitinfo, mbuf_t m, int
     mbuf_t old_packet = m;
     uint32_t packet_bytes = 0;
     unsigned char packet[CTL_RCV_BUFFER_SIZE];
+    struct ctl_data *ctl_data;
     struct tcpcrypt_info *ti;
     
     // get length of packet
@@ -143,7 +144,6 @@ int ctl_send(kern_ctl_ref kctlref, u_int32_t unit, void *unitinfo, mbuf_t m, int
         old_packet = mbuf_next(old_packet);
     } while (old_packet != NULL);
 
-    
     // zero packet
     bzero(&packet, packet_bytes);
     
@@ -156,9 +156,9 @@ int ctl_send(kern_ctl_ref kctlref, u_int32_t unit, void *unitinfo, mbuf_t m, int
     if (0 != (error = mbuf_copydata(m, 0, packet_bytes, packet)))
         printf("ERROR - mbuf_copydata returned %d\n", error);
     
-    ti = (struct tcpcrypt_info *) packet;
+    ctl_data = (struct ctl_data *) packet;
     
-    printf("ctl_send mbuf data algo %u\n", ti->ti_ciphers_sym->sc_algo);
+    printf("ctl_send mbuf data algo 0x%x\n", ctl_data->c_ti.ti_ciphers_pkey->tcs_algo);
     
     mbuf_freem(m);
     
@@ -278,7 +278,7 @@ struct kern_ctl_reg ctl_reg = {
     0,                  // set to 0 for dynamically assigned ctl ID, CTL_FLAG_REG_ID_UNIT not set
     0,                  // ctl_unit - ignored when CTL_FLAG_REG_ID_UNIT not set
     CTL_FLAG_PRIVILEGED,    // privileged access required to access this filter
-    CTL_SEND_BUFFER_SIZE,   // use default send size buffer
+    CTL_SEND_BUFFER_SIZE,   // override send buffer size
     CTL_RCV_BUFFER_SIZE,    // override receive buffer size
     ctl_connect,        // called when a connection request is accepted
     ctl_disconnect,     // called when a connection becomes disconnected

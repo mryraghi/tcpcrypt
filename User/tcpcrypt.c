@@ -35,13 +35,13 @@ struct ciphers ciphers_sym;
 
 static int so = -1;
 
-static int ctl_set_option(struct tcpcrypt_info *ti, enum ctl_action action)
+static int ctl_send_to_so(struct ctl_data *ctl_data)
 {
-    printf("ctl_set_option, sending %zu\n", sizeof(*ti));
+    printf("ctl_set_option, sending %zu\n", sizeof(*ctl_data));
     
     int result = 0;
     
-    if (send(so, ti, sizeof(*ti), 0) != sizeof(*ti))
+    if (send(so, ctl_data, sizeof(*ctl_data), 0) != sizeof(*ctl_data))
         return -1;
     
     return result;
@@ -65,15 +65,15 @@ static void generate_nonce(struct tcpcrypt_info *ti, int len) {
     do_random(ti->ti_nonce, ti->ti_nonce_len);
 }
 
-static void init_ti(struct tcpcrypt_info *ti)
+static void init_ti(struct ctl_data *ctl_data)
 {
-    ti->ti_ciphers_pkey = _pkey;
-    ti->ti_ciphers_pkey_len = _pkey_len;
-    ti->ti_ciphers_sym = _sym;
-    ti->ti_ciphers_sym_len = _sym_len;
+    ctl_data->c_ti.ti_ciphers_pkey = _pkey;
+    ctl_data->c_ti.ti_ciphers_pkey_len = _pkey_len;
+    ctl_data->c_ti.ti_ciphers_sym = _sym;
+    ctl_data->c_ti.ti_ciphers_sym_len = _sym_len;
 //    generate_nonce(ti, ti->ti_crypt_pub->cp_n_c);
     
-    if (ctl_set_option(ti, INIT_TI))
+    if (ctl_send_to_so(ctl_data))
         perror("Error while setting option!\n");
 }
 
@@ -107,7 +107,7 @@ static void handle_ctl_data(struct ctl_data *ctl_data)
     printf("been here ctl_data->c_action %d\n", ctl_data->c_action);
     switch (ctl_data->c_action) {
         case INIT_TI:
-            init_ti(&ctl_data->c_ti);
+            init_ti(ctl_data);
             break;
 
         case INIT_PKEY:
@@ -275,12 +275,6 @@ int main(int argc, char * const *argv)
         setup_cipher(ci);
         ci = ci->c_next;
     }
-    
-//    struct ciphers *cc = ciphers_pkey.c_next;
-//    while (cc->c_next) {
-//        printf("test --> type %d, cc->c_next type %d\n", cc->c_cipher->c_type, cc->c_next->c_cipher->c_type);
-//        cc = cc->c_next;
-//    }
     
     init_cipher(&ciphers_pkey);
     init_cipher(&ciphers_sym);

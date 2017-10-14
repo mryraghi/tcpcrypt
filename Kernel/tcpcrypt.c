@@ -70,27 +70,6 @@ static void set_eno(struct tcpopt_eno *eno, int len)
     eno->toe_opts[1] = TC_CIPHER_ECDHE_P521;
 }
 
-static void ti_init(struct tcpcrypt_info *ti)
-{
-    int result = 0;
-    bzero(ti, sizeof(*ti));
-    
-    ti->ti_state = tc_conf.tc_enabled ? STATE_CLOSED : STATE_DISABLED;
-    ti->ti_mtu = TC_MTU;
-    ti->ti_mss_clamp = 40; // TODO
-    ti->ti_sack_disable = 1;
-    ti->ti_rto = 100 * 1000; // TODO
-    ti->ti_nocache = tc_conf.tc_nocache;
-    ti->ti_ciphers_init = 0;
-    
-    printf("ti_init\n");
-    
-    // if couldn't initiate ti and its ciphers then disable tcpcrypt
-    // TODO: could try again
-    if (0 != (result = ctl_send_to_client(ti, INIT_TI)))
-        ti->ti_state = STATE_DISABLED;
-}
-
 static int connected(struct tcpcrypt_info *ti) {
     return ti->ti_state == STATE_ENCRYPTING
     || ti->ti_state == STATE_REKEY_SENT
@@ -100,7 +79,7 @@ static int connected(struct tcpcrypt_info *ti) {
 struct connection* new_connection(struct ip *ip, struct tcphdr *tcp, int dir)
 {
     printf("INFO - new_connection\n");
-    
+    int result = 0;
     struct connection *c;
     struct tcpcrypt_info *ti;
     
@@ -109,17 +88,24 @@ struct connection* new_connection(struct ip *ip, struct tcphdr *tcp, int dir)
                                           malloc_tag);
     
     bzero(c, sizeof(*c));
+    bzero(ti, sizeof(*ti));
     
     c->c_addr[!dir].sin_addr.s_addr = ip->ip_src.s_addr;
     c->c_addr[!dir].sin_port = tcp->th_sport;
     c->c_addr[dir].sin_addr.s_addr = ip->ip_dst.s_addr;
     c->c_addr[dir].sin_port = tcp->th_dport;
     
-    ti_init(ti);
-    
-    // TODO: c_addr[0]?
+    ti->ti_state = tc_conf.tc_enabled ? STATE_CLOSED : STATE_DISABLED;
+    ti->ti_mtu = TC_MTU;
+    ti->ti_mss_clamp = 40; // TODO
+    ti->ti_sack_disable = 1;
+    ti->ti_rto = 100 * 1000; // TODO
+    ti->ti_nocache = tc_conf.tc_nocache;
+    ti->ti_ciphers_init = 0;
     ti->ti_dst_ip.s_addr = c->c_addr[!dir].sin_addr.s_addr;
     ti->ti_dst_port = c->c_addr[!dir].sin_port;
+    ti->ti_dir_packet = dir;
+    ti->ti_csum = 0;
     ti->ti_conn = c;
     c->c_ti = ti;
     
@@ -131,6 +117,11 @@ struct connection* new_connection(struct ip *ip, struct tcphdr *tcp, int dir)
     
     // release lock
     lck_mtx_unlock(connections_queue_mtx);
+    
+    // if couldn't initiate ti and its ciphers then disable tcpcrypt
+    // TODO: could try again
+    if (0 != (result = ctl_send_to_client(ti, INIT_TI)))
+        ti->ti_state = STATE_DISABLED;
     
     return c;
 }
@@ -1123,7 +1114,7 @@ static void tcpcrypt_packet(mbuf_t *mbuf, pkt_dir dir, ipf_pktopts_t options)
     struct ip *ip;
     struct tcphdr *tcp;
     struct connection *c;
-    unsigned char packet[1500];
+    unsigned char packet[TC_MTU];
     mbuf_t old_packet = *mbuf;
     uint32_t packet_bytes = 0;
     
@@ -1187,10 +1178,6 @@ static void tcpcrypt_packet(mbuf_t *mbuf, pkt_dir dir, ipf_pktopts_t options)
 //            }
 //        }
 //    }
-    
-    // save direction and init csum
-    c->c_ti->ti_dir_packet = dir;
-    c->c_ti->ti_csum = 0;
     
     // IN/OUT
     if (dir)
